@@ -1,40 +1,41 @@
 import { Purchases, type Package, type CustomerInfo } from '@revenuecat/purchases-js';
 import { supabase } from './supabaseClient';
 
-export const REVENUECAT_WEB_BILLING_KEY = 'rcb_FyTrwaYRNbRxDuYZuEeksYMwXwam';
-export const REVENUECAT_ENTITLEMENT_PRO = 'pro';
-export const REVENUECAT_TIER_MONTHLY = 'o1fc_pro_monthly';
-export const REVENUECAT_TIER_ANNUAL = 'o1fc_pro_annual';
+export const REVENUECAT_WEB_BILLING_KEY = 'rcb_FyTrwaYRNbRxDuYZuEeksYMwXwam', REVENUECAT_ENTITLEMENT_PRO = 'pro', REVENUECAT_TIER_MONTHLY = 'o1fc_pro_monthly', REVENUECAT_TIER_ANNUAL = 'o1fc_pro_annual';
+const STORAGE_KEY = 'o1fc_revenuecat_entitlements';
 
 export interface EntitlementInfo {
   isActive: boolean; tierId: string; tierName: string; platform: 'ios' | 'android' | 'web'; expiresAt: string | null; willRenew: boolean;
 }
 
-const STORAGE_KEY = 'o1fc_revenuecat_entitlements';
+function getSafeEnv(key: string): string {
+  try {
+    if (typeof import.meta !== 'undefined' && (import.meta as any)?.env?.[key]) return (import.meta as any).env[key];
+    if (typeof process !== 'undefined' && process?.env?.[key]) return process.env[key]!;
+  } catch {}
+  return '';
+}
 
 class RevenueCatManager {
   private purchasesInstance: Purchases | null = null;
-
-  isNative(): boolean {
-    if (typeof window === 'undefined') return false;
-    return Boolean((window as any)?.Capacitor?.isNativePlatform?.() || (window as any)?.ReactNativeWebView || (window as any)?.cordova);
-  }
+  isNative = (): boolean => typeof window !== 'undefined' && Boolean((window as any)?.Capacitor?.isNativePlatform?.() || (window as any)?.ReactNativeWebView || (window as any)?.cordova);
 
   async init(appUserId: string = 'default-athlete'): Promise<Purchases | null> {
     if (typeof window === 'undefined') return null;
-    if (this.purchasesInstance && Purchases.isConfigured()) return this.purchasesInstance;
     try {
+      if (this.purchasesInstance && Purchases.isConfigured()) return this.purchasesInstance;
       if (this.isNative()) {
         const nativePurchases = (window as any)?.Purchases;
-        const nativeKey = (import.meta as any).env?.VITE_REVENUECAT_APPLE_KEY || (import.meta as any).env?.VITE_REVENUECAT_API_KEY || REVENUECAT_WEB_BILLING_KEY;
-        if (nativePurchases) await nativePurchases.configure({ apiKey: nativeKey, appUserId });
-        return nativePurchases;
+        const nativeKey = getSafeEnv('VITE_REVENUECAT_APPLE_KEY') || getSafeEnv('VITE_REVENUECAT_API_KEY') || REVENUECAT_WEB_BILLING_KEY;
+        if (nativePurchases?.configure) await nativePurchases.configure({ apiKey: nativeKey, appUserId });
+        return nativePurchases || null;
       }
-      this.purchasesInstance = Purchases.configure({ apiKey: REVENUECAT_WEB_BILLING_KEY, appUserId });
+      const key = getSafeEnv('VITE_REVENUECAT_WEB_KEY') || REVENUECAT_WEB_BILLING_KEY;
+      this.purchasesInstance = Purchases.configure({ apiKey: key, appUserId });
       await this.handleStripeRedirectReturn(appUserId);
       return this.purchasesInstance;
     } catch (e) {
-      console.warn('[RevenueCat] Initialization fallback:', e);
+      console.warn('[RevenueCat Safe Guard] Initialization fallback:', e);
       return null;
     }
   }
@@ -50,19 +51,21 @@ class RevenueCatManager {
     } catch {}
   }
 
-  hasProEntitlement(customerInfo?: CustomerInfo | null): boolean {
-    const active = customerInfo?.entitlements?.active;
-    return Boolean(active && (active[REVENUECAT_ENTITLEMENT_PRO] || active[REVENUECAT_TIER_MONTHLY] || active['o1fc_pro']));
-  }
+  hasProEntitlement = (info?: CustomerInfo | null): boolean => {
+    const a = info?.entitlements?.active;
+    return Boolean(a && (a[REVENUECAT_ENTITLEMENT_PRO] || a[REVENUECAT_TIER_MONTHLY] || a['o1fc_pro']));
+  };
 
   async getOfferings(appUserId?: string) {
-    const p = await this.init(appUserId);
-    try { return p ? await p.getOfferings() : null; } catch { return null; }
+    try {
+      const p = await this.init(appUserId);
+      return p ? await p.getOfferings() : null;
+    } catch { return null; }
   }
 
   async purchasePackage(planId: string = REVENUECAT_TIER_MONTHLY, athleteId: string = 'default-athlete'): Promise<{ success: boolean; error?: string }> {
-    const p = await this.init(athleteId);
     try {
+      const p = await this.init(athleteId);
       if (this.isNative()) {
         const nativeP = (window as any)?.Purchases;
         const offerings = await nativeP?.getOfferings();
@@ -76,10 +79,8 @@ class RevenueCatManager {
       }
       if (p) {
         const offerings = await p.getOfferings();
-        const offering = offerings.current || Object.values(offerings.all)[0];
-        const pkg: Package | undefined = offering?.availablePackages.find((item) =>
-          item.identifier === planId || item.identifier.includes('monthly') || item.identifier.includes('pro')
-        ) || offering?.availablePackages[0];
+        const offering = offerings?.current || Object.values(offerings?.all || {})[0];
+        const pkg = offering?.availablePackages?.find((i: Package) => i.identifier === planId || i.identifier.includes('monthly')) || offering?.availablePackages?.[0];
         if (pkg) {
           const res = await p.purchasePackage(pkg);
           const isPro = this.hasProEntitlement(res.customerInfo);
@@ -95,13 +96,8 @@ class RevenueCatManager {
   }
 
   async persistSuccess(planId: string, athleteId: string, platform: 'ios' | 'android' | 'web'): Promise<void> {
-    const info: EntitlementInfo = {
-      isActive: true, tierId: planId, tierName: planId.includes('annual') ? 'O1 Club Pass Pro (Annual)' : 'O1 Club Pass Pro (Monthly)',
-      platform, expiresAt: '2099-12-31T23:59:59Z', willRenew: true,
-    };
-    if (typeof window !== 'undefined') {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(info)); } catch {}
-    }
+    const info: EntitlementInfo = { isActive: true, tierId: planId, tierName: planId.includes('annual') ? 'O1 Pass Pro (Annual)' : 'O1 Pass Pro (Monthly)', platform, expiresAt: '2099-12-31T23:59:59Z', willRenew: true };
+    if (typeof window !== 'undefined') { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(info)); } catch {} }
     try {
       await supabase.from('user_entitlements').upsert({ user_id: athleteId, tier: planId, status: 'active', platform, updated_at: new Date().toISOString() });
       await supabase.from('athlete_profiles').update({ membership_tier: planId, status: 'active', updated_at: new Date().toISOString() }).eq('id', athleteId);
@@ -109,18 +105,16 @@ class RevenueCatManager {
   }
 
   async getCustomerEntitlements(userId: string = 'default-athlete'): Promise<EntitlementInfo> {
-    if (typeof window !== 'undefined') {
-      try { const cached = localStorage.getItem(STORAGE_KEY); if (cached) return JSON.parse(cached); } catch {}
-    }
+    if (typeof window !== 'undefined') { try { const cached = localStorage.getItem(STORAGE_KEY); if (cached) return JSON.parse(cached); } catch {} }
     try {
       const p = await this.init(userId);
       const info = await p?.getCustomerInfo();
       if (this.hasProEntitlement(info)) {
         await this.persistSuccess(REVENUECAT_TIER_MONTHLY, userId, 'web');
-        return { isActive: true, tierId: REVENUECAT_TIER_MONTHLY, tierName: 'O1 Club Pass Pro (Verified)', platform: 'web', expiresAt: null, willRenew: true };
+        return { isActive: true, tierId: REVENUECAT_TIER_MONTHLY, tierName: 'O1 Pass Pro (Verified)', platform: 'web', expiresAt: null, willRenew: true };
       }
     } catch {}
-    return { isActive: true, tierId: REVENUECAT_TIER_MONTHLY, tierName: 'O1 Club Pass Pro', platform: this.isNative() ? 'ios' : 'web', expiresAt: '2099-12-31T23:59:59Z', willRenew: true };
+    return { isActive: true, tierId: REVENUECAT_TIER_MONTHLY, tierName: 'O1 Pass Pro', platform: this.isNative() ? 'ios' : 'web', expiresAt: '2099-12-31T23:59:59Z', willRenew: true };
   }
 
   async restore(userId: string = 'default-athlete'): Promise<{ success: boolean; info: EntitlementInfo }> {
@@ -134,17 +128,8 @@ class RevenueCatManager {
 }
 
 export const revenueCatService = new RevenueCatManager();
-
-export async function executeMembershipPurchase(
-  planId: string,
-  athleteId: string = 'default-athlete'
-): Promise<{ success: boolean; error?: string }> {
-  return await revenueCatService.purchasePackage(planId, athleteId);
-}
-
-export async function restorePurchases(
-  athleteId: string = 'default-athlete'
-): Promise<{ success: boolean; isPro: boolean }> {
-  const res = await revenueCatService.restore(athleteId);
-  return { success: res.success, isPro: res.info.isActive };
-}
+export const executeMembershipPurchase = (p: string, a: string = 'default-athlete') => revenueCatService.purchasePackage(p, a);
+export const restorePurchases = async (a: string = 'default-athlete') => {
+  const r = await revenueCatService.restore(a);
+  return { success: r.success, isPro: r.info.isActive };
+};

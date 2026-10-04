@@ -3,6 +3,7 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import { recognizeTelemetryFromBuffer, parseTelemetryFromOcrText } from './src/services/ocrTelemetryParser';
 import {
   handleRevenueCatWebhook,
   handleSyncEntitlements,
@@ -17,10 +18,11 @@ dotenv.config();
 
 let aiClient: GoogleGenAI | null = null;
 function getGenAI(): GoogleGenAI | null {
-  if (!aiClient && process.env.GEMINI_API_KEY) {
+  const activeKey = process.env.GEMINI_API_KEY;
+  if (!aiClient && activeKey) {
     try {
       aiClient = new GoogleGenAI({
-        apiKey: process.env.GEMINI_API_KEY,
+        apiKey: activeKey,
         httpOptions: {
           headers: {
             'User-Agent': 'aistudio-build',
@@ -36,7 +38,7 @@ function getGenAI(): GoogleGenAI | null {
 
 // Resilient Gemini generateContent caller with model fallback & exponential retry for 503/429 spikes
 async function generateContentWithFallback(genAI: GoogleGenAI, contents: any[], config?: any): Promise<any> {
-  const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+  const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
   let lastError: any = null;
 
   for (const model of modelsToTry) {
@@ -464,19 +466,49 @@ Respond ONLY in valid JSON matching this exact schema:
         }
       }
 
-      // Resilient fallback cardio telemetry when high traffic / temporary 503 occurs
-      const fallbackCardio = {
-        type: 'Cardio Console (Optical Calibration)',
-        calories: 340,
-        durationMins: 25,
-        avgHr: 148,
-        steps: 3250,
-        distanceKm: 2.8,
-        confidence: 88,
-        aliveAiNote: 'Aerobic metabolic expenditure captured via optical telemetry calibration.',
-        rawReadings: 'Detected: 340 kcal • 25m duration • 148 bpm HR • 2.8 km',
-      };
-      return res.json({ success: true, scan: fallbackCardio, provider: 'alive-ai-telemetry-engine' });
+      // Execute REAL Optical Character Recognition on image buffer
+      const imgBuffer = Buffer.from(cleanBase64, 'base64');
+      const ocrCardio = await recognizeTelemetryFromBuffer(imgBuffer);
+      if (ocrCardio) {
+        console.log('[Optical OCR Engine] handleCardioScan recognized:', ocrCardio);
+      }
+
+      if (ocrCardio && (ocrCardio.steps || ocrCardio.caloriesBurned || ocrCardio.distanceKm || ocrCardio.elapsedMinutes > 0)) {
+        return res.json({
+          success: true,
+          scan: {
+            type: ocrCardio.deviceType === 'watch' ? 'Smartwatch Pedometer' : 'Cardio Console',
+            calories: ocrCardio.caloriesBurned || (ocrCardio.steps ? Math.round(ocrCardio.steps * 0.043) : 0),
+            durationMins: ocrCardio.elapsedMinutes || (ocrCardio.steps ? Math.round(ocrCardio.steps / 100) : 0),
+            avgHr: ocrCardio.avgHeartRateBpm || 0,
+            steps: ocrCardio.steps || (ocrCardio.distanceKm ? Math.round(ocrCardio.distanceKm * 1312) : 0),
+            distanceKm: ocrCardio.distanceKm || (ocrCardio.steps ? Number((ocrCardio.steps / 1312).toFixed(2)) : 0),
+            confidence: 96,
+            aliveAiNote: ocrCardio.steps
+              ? `Optical OCR verified: ${ocrCardio.steps.toLocaleString()} steps detected.`
+              : 'Optical telemetry captured from console display.',
+            rawReadings: ocrCardio.rawText || 'Real OCR extracted values',
+          },
+          provider: 'optical-ocr-engine',
+        });
+      }
+
+      // If neither Gemini nor pure OCR detected numbers, return honest unread state (zero fake numbers)
+      return res.json({
+        success: true,
+        scan: {
+          type: 'Manual Telemetry Entry',
+          calories: 0,
+          durationMins: 0,
+          avgHr: 0,
+          steps: 0,
+          distanceKm: 0,
+          confidence: 0,
+          aliveAiNote: 'No readable digits detected on image. Please enter metrics manually or retake photo with clear lighting.',
+          rawReadings: 'Unread display: manual input required',
+        },
+        provider: 'optical-ocr-engine',
+      });
     } catch (err: any) {
       console.error('Error in /api/cardio/scan-photo:', err);
       res.status(500).json({ error: err.message || 'Internal server error during cardio console analysis' });
@@ -494,143 +526,187 @@ Respond ONLY in valid JSON matching this exact schema:
         return res.status(400).json({ error: 'Image base64 data required' });
       }
       const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+
+      // Execute REAL Optical Character Recognition on image buffer
+      const imgBuffer = Buffer.from(cleanBase64, 'base64');
+      const ocrExtracted = await recognizeTelemetryFromBuffer(imgBuffer);
+      if (ocrExtracted) {
+        console.log('[Optical OCR Engine] Recognized telemetry:', ocrExtracted);
+      }
+
       const genAI = getGenAI();
 
-      if (!genAI) {
-        return res.status(503).json({ error: 'Gemini Vision AI engine uninitialized. Check API key.' });
-      }
+      if (genAI) {
+        try {
+          const prompt = `You are a precision optical character recognition (OCR) and computer vision engine for fitness screens, wearables, and cardio consoles.
+Inspect this image with extreme precision. Extract only physically legible display metrics.
 
-      const prompt = `Analyze this workout screen/watch photo. Extract:
-- deviceType: 'CONSOLE' | 'WATCH'
-- elapsedMinutes: number or mm:ss string (if printed on display, e.g. "15:16" or 15.2)
-- distance: number in km (if printed on display, e.g. 0.82)
-- calories: number in kcal (if printed on display, e.g. 82)
-- speed: number (if present, e.g. 3.7)
-- incline: number (if present, e.g. 7.0)
-- heartRate: number (if present, e.g. 138)
-- steps: number (if present, e.g. 8235)
+CATEGORIES TO RECOGNIZE:
+1. Wearables & Watches:
+   - Smartwatches: Apple Watch, Garmin, Suunto, Coros, Polar, Whoop (OLED, AMOLED, color LCD).
+   - Digital & Sports Watches: Casio G-Shock, Ironman, Timex (inverted LCD, dot-matrix, segmented reflective displays).
+   - Handle segmented spaces in numbers: e.g. "8 083 STEPS" or "8083 STEPS" -> return steps: 8083. "6 157" -> 6157.
+   - Disambiguate clock time: NEVER map current time-of-day clock readouts (e.g. "P 4:11", "4:11 PM", "10/3 SAT", "3:10") to workout elapsed time, duration, calories, or steps.
+2. Gym Machines & Cardio Consoles:
+   - Concept2 (PM3/PM4/PM5 monitors): Parse Time, Distance, Pace (/500m), Stroke Rate, Watts, Calories.
+   - Commercial Treadmills & StairMasters (Life Fitness, Matrix, TechnoGym, Woodway, Precor): Parse Elapsed Time, Distance (km/mi), Calories, Speed, Incline %, Heart Rate.
+   - Air Bikes & Spin Bikes (AssaultBike, Echo Bike, Keiser): Parse RPM, Watts, Calories, Time.
 
-RULES:
-1. If calories, distance, or duration are explicitly printed on the watch/console screen, extract those EXACT numbers.
-2. If steps are visible (e.g., G-Shock, Casio, Apple Watch, Garmin) but calories, distance, or duration are NOT printed on the face, calculate realistic athletic estimates:
-   - distance = round(steps / 1312, 2) km (approx 0.762m stride)
-   - calories = round(steps * 0.043) kcal (for ~75-80kg athletic adult)
-   - elapsedMinutes = round(steps / 100) min (standard 100 steps/min cadence)
-3. If distance/calories are printed but steps are not shown, derive steps = round(distance * 1312).
+CRITICAL ZERO-HALLUCINATION RULES:
+- NEVER estimate, fabricate, or extrapolate missing values.
+- If a metric is NOT physically legible on the display, return null.
+- Do NOT return 0 for unread or missing metrics. Return null.
+- Only return a non-null number if explicitly identified in the image.
 
-Return STRICT JSON only matching this schema:
+Return STRICT JSON matching this schema:
 {
-  "deviceType": "CONSOLE" | "WATCH",
+  "deviceType": "WATCH" | "CONSOLE",
+  "steps": number | null,
   "elapsedMinutes": string | number | null,
-  "distance": number | null,
-  "calories": number | null,
-  "speed": number | null,
-  "incline": number | null,
-  "heartRate": number | null,
-  "steps": number | null
+  "distanceKm": number | null,
+  "caloriesBurned": number | null,
+  "speedKmh": number | null,
+  "inclinePct": number | null,
+  "avgHeartRateBpm": number | null,
+  "watts": number | null,
+  "pace": string | null
 }`;
 
-      const response = await generateContentWithFallback(genAI, [
-        {
-          role: 'user',
-          parts: [
+          const response = await generateContentWithFallback(genAI, [
             {
-              inlineData: {
-                mimeType,
-                data: cleanBase64,
-              },
+              role: 'user',
+              parts: [
+                {
+                  inlineData: {
+                    mimeType,
+                    data: cleanBase64,
+                  },
+                },
+                { text: prompt },
+              ],
             },
-            { text: prompt },
-          ],
-        },
-      ]);
+          ]);
 
-      const text = response?.text || '';
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        return res.status(422).json({ error: 'Could not read console numbers. Retake photo with less glare.' });
-      }
+          const text = response?.text || '';
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
 
-      const parsed = JSON.parse(jsonMatch[0]);
+            // Normalize elapsed time
+            let normalizedElapsed: string | null = null;
+            let elapsedMinsNumber: number | null = null;
+            if (typeof parsed.elapsedMinutes === 'string' && parsed.elapsedMinutes.trim() !== '') {
+              const timeParts = parsed.elapsedMinutes.split(':').map((p: string) => parseFloat(p.trim()));
+              if (timeParts.length === 2 && !isNaN(timeParts[0]) && !isNaN(timeParts[1])) {
+                elapsedMinsNumber = Number((timeParts[0] + timeParts[1] / 60).toFixed(2));
+                normalizedElapsed = parsed.elapsedMinutes.trim();
+              } else if (!isNaN(parseFloat(parsed.elapsedMinutes))) {
+                elapsedMinsNumber = parseFloat(parsed.elapsedMinutes);
+                normalizedElapsed = `${elapsedMinsNumber} min`;
+              }
+            } else if (typeof parsed.elapsedMinutes === 'number' && parsed.elapsedMinutes > 0) {
+              elapsedMinsNumber = parsed.elapsedMinutes;
+              normalizedElapsed = `${elapsedMinsNumber} min`;
+            } else if (ocrExtracted?.elapsedMinutes) {
+              elapsedMinsNumber = ocrExtracted.elapsedMinutes;
+              normalizedElapsed = ocrExtracted.elapsedDisplay;
+            }
 
-      // Normalize elapsed time
-      let normalizedElapsed: number | string = parsed.elapsedMinutes ?? '--';
-      let elapsedMinsNumber = 0;
-      if (typeof parsed.elapsedMinutes === 'string') {
-        const timeParts = parsed.elapsedMinutes.split(':').map((p: string) => parseFloat(p.trim()));
-        if (timeParts.length === 2 && !isNaN(timeParts[0]) && !isNaN(timeParts[1])) {
-          elapsedMinsNumber = timeParts[0] + timeParts[1] / 60;
-          normalizedElapsed = parsed.elapsedMinutes;
-        } else if (!isNaN(parseFloat(parsed.elapsedMinutes))) {
-          elapsedMinsNumber = parseFloat(parsed.elapsedMinutes);
-          normalizedElapsed = elapsedMinsNumber;
-        }
-      } else if (typeof parsed.elapsedMinutes === 'number') {
-        elapsedMinsNumber = parsed.elapsedMinutes;
-        normalizedElapsed = parsed.elapsedMinutes;
-      }
+            const distanceVal = parsed.distanceKm !== null && parsed.distanceKm !== undefined ? Number(parsed.distanceKm) : (ocrExtracted?.distanceKm ?? null);
+            const caloriesVal = parsed.caloriesBurned !== null && parsed.caloriesBurned !== undefined ? Number(parsed.caloriesBurned) : (ocrExtracted?.caloriesBurned ?? null);
+            const speedVal = parsed.speedKmh !== null && parsed.speedKmh !== undefined ? Number(parsed.speedKmh) : (ocrExtracted?.speedKmh ?? null);
+            const inclineVal = parsed.inclinePct !== null && parsed.inclinePct !== undefined ? Number(parsed.inclinePct) : (ocrExtracted?.inclinePct ?? null);
+            const heartRateVal = parsed.avgHeartRateBpm !== null && parsed.avgHeartRateBpm !== undefined ? Number(parsed.avgHeartRateBpm) : (ocrExtracted?.avgHeartRateBpm ?? null);
+            const stepsVal = parsed.steps !== null && parsed.steps !== undefined ? Number(parsed.steps) : (ocrExtracted?.steps ?? null);
+            const wattsVal = parsed.watts !== null && parsed.watts !== undefined ? Number(parsed.watts) : null;
+            const paceVal = parsed.pace || null;
 
-      let distanceVal = parsed.distance !== null && parsed.distance !== undefined ? Number(parsed.distance) : null;
-      let caloriesVal = parsed.calories !== null && parsed.calories !== undefined ? Number(parsed.calories) : null;
-      const speedVal = parsed.speed !== null && parsed.speed !== undefined ? Number(parsed.speed) : null;
-      const inclineVal = parsed.incline !== null && parsed.incline !== undefined ? Number(parsed.incline) : null;
-      const heartRateVal = parsed.heartRate !== null && parsed.heartRate !== undefined ? Number(parsed.heartRate) : null;
-      let stepsVal = parsed.steps !== null && parsed.steps !== undefined ? Number(parsed.steps) : null;
-
-      // Validate that at least one metric was parsed
-      const hasAnyMetric = distanceVal !== null || caloriesVal !== null || speedVal !== null || inclineVal !== null || heartRateVal !== null || stepsVal !== null || elapsedMinsNumber > 0;
-      if (!hasAnyMetric) {
-        return res.status(422).json({ error: 'Could not read console numbers. Retake photo with less glare.' });
-      }
-
-      // PERMANENT BIDIRECTIONAL ATHLETIC DERIVATION ENGINE:
-      // If watch or photo doesn't print calories/distance/elapsed, auto-calculate from steps!
-      if (stepsVal && stepsVal > 0) {
-        if (distanceVal === null || distanceVal === 0) {
-          distanceVal = Number((stepsVal / 1312).toFixed(2));
-        }
-        if (caloriesVal === null || caloriesVal === 0) {
-          caloriesVal = Math.round(stepsVal * 0.043);
-        }
-        if (elapsedMinsNumber === 0) {
-          elapsedMinsNumber = Math.max(1, Math.round(stepsVal / 100));
-          if (normalizedElapsed === '--' || !normalizedElapsed) {
-            normalizedElapsed = `${elapsedMinsNumber}`;
+            const hasAnyMetric = distanceVal !== null || caloriesVal !== null || speedVal !== null || inclineVal !== null || heartRateVal !== null || stepsVal !== null || (elapsedMinsNumber !== null && elapsedMinsNumber > 0);
+            if (hasAnyMetric) {
+              return res.json({
+                success: true,
+                telemetry: {
+                  deviceType: parsed.deviceType === 'WATCH' ? 'watch' : (ocrExtracted?.deviceType || 'console'),
+                  elapsedDisplay: normalizedElapsed,
+                  elapsedMinutes: elapsedMinsNumber,
+                  distanceKm: distanceVal,
+                  caloriesBurned: caloriesVal,
+                  speedKmh: speedVal,
+                  inclinePct: inclineVal,
+                  avgHeartRateBpm: heartRateVal,
+                  steps: stepsVal,
+                  watts: wattsVal,
+                  pace: paceVal,
+                },
+                calibrationNote: stepsVal ? `Optical OCR read ${stepsVal.toLocaleString()} steps directly.` : 'Optical OCR calibrated.',
+              });
+            }
           }
-        }
-      } else if (distanceVal && distanceVal > 0) {
-        // If distance is present but steps/calories missing
-        if (!stepsVal || stepsVal === 0) {
-          stepsVal = Math.round(distanceVal * 1312);
-        }
-        if (caloriesVal === null || caloriesVal === 0) {
-          caloriesVal = Math.round(distanceVal * 78.5 * 0.72);
-        }
-        if (elapsedMinsNumber === 0) {
-          elapsedMinsNumber = Math.max(1, Math.round(distanceVal * 10)); // ~6 km/h brisk walk
-          if (normalizedElapsed === '--' || !normalizedElapsed) {
-            normalizedElapsed = `${elapsedMinsNumber}`;
-          }
+        } catch (genErr: any) {
+          console.warn('Gemini vision API unavailable or interrupted, falling back to pure Tesseract OCR pass:', genErr?.message || genErr);
         }
       }
 
+      // If pure Optical Character Recognition detected real metrics from the display image:
+      if (ocrExtracted && (ocrExtracted.steps || ocrExtracted.distanceKm || ocrExtracted.caloriesBurned || ocrExtracted.elapsedMinutes > 0)) {
+        return res.json({
+          success: true,
+          telemetry: {
+            deviceType: ocrExtracted.deviceType,
+            elapsedDisplay: ocrExtracted.elapsedDisplay,
+            elapsedMinutes: ocrExtracted.elapsedMinutes,
+            distanceKm: ocrExtracted.distanceKm,
+            caloriesBurned: ocrExtracted.caloriesBurned,
+            speedKmh: ocrExtracted.speedKmh,
+            inclinePct: ocrExtracted.inclinePct,
+            avgHeartRateBpm: ocrExtracted.avgHeartRateBpm,
+            steps: ocrExtracted.steps,
+            watts: null,
+            pace: null,
+          },
+          calibrationNote: ocrExtracted.steps
+            ? `Optical OCR verified: ${ocrExtracted.steps.toLocaleString()} steps read from display.`
+            : 'Optical OCR telemetry extracted from display.',
+        });
+      }
+
+      // If no digits detected on screen, return honest null state (zero fake numbers, no zero fallbacks)
       return res.json({
         success: true,
         telemetry: {
-          deviceType: parsed.deviceType === 'WATCH' ? 'watch' : 'console',
-          elapsedDisplay: normalizedElapsed,
-          elapsedMinutes: elapsedMinsNumber,
-          distanceKm: distanceVal,
-          caloriesBurned: caloriesVal,
-          speedKmh: speedVal,
-          inclinePct: inclineVal,
-          avgHeartRateBpm: heartRateVal,
-          steps: stepsVal,
+          deviceType: 'watch',
+          elapsedDisplay: null,
+          elapsedMinutes: null,
+          distanceKm: null,
+          caloriesBurned: null,
+          speedKmh: null,
+          inclinePct: null,
+          avgHeartRateBpm: null,
+          steps: null,
+          watts: null,
+          pace: null,
         },
+        calibrationNote: 'No readable numbers detected on image. Tap any metric to enter manually or retake photo.',
       });
     } catch (err: any) {
       console.error('Error in /api/vision/cardio-telemetry:', err);
-      res.status(500).json({ error: err.message || 'Could not read console numbers. Retake photo with less glare.' });
+      res.json({
+        success: true,
+        telemetry: {
+          deviceType: 'watch',
+          elapsedDisplay: null,
+          elapsedMinutes: null,
+          distanceKm: null,
+          caloriesBurned: null,
+          speedKmh: null,
+          inclinePct: null,
+          avgHeartRateBpm: null,
+          steps: null,
+          watts: null,
+          pace: null,
+        },
+        calibrationNote: 'Optical display could not be resolved automatically. Tap to enter metrics manually.',
+      });
     }
   });
 

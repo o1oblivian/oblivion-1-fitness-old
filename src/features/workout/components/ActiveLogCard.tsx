@@ -376,10 +376,12 @@ export const ActiveLogCard: React.FC<ActiveLogCardProps> = ({ onShowToast }) => 
     // 3. Advance active program day so tomorrow's workout or rest day becomes visible in both My Coach and Log dashboard
     const advanceResult = useActiveProgramStore.getState().completeTodayAndAdvance();
 
-    if (advanceResult.isRestDay) {
-      notify(`Session Log Registered! Tomorrow is a Scheduled Rest Day: "${advanceResult.nextDay.title}".`);
-    } else {
+    if (advanceResult?.isRestDay) {
+      notify(`Session Log Registered! Tomorrow is a Scheduled Rest Day: "${advanceResult?.nextDay?.title || 'Active Recovery'}".`);
+    } else if (advanceResult?.nextDay?.title) {
       notify(`Session Log Registered! Next Day Loaded: "${advanceResult.nextDay.title}". Prepare ahead!`);
+    } else {
+      notify('Session Log Registered! Excellent performance.');
     }
   };
 

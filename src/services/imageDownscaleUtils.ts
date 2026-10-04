@@ -1,4 +1,4 @@
-export async function downscaleBase64IfNeeded(base64: string, maxDim = 1280, quality = 0.8): Promise<string> {
+export async function downscaleBase64IfNeeded(base64: string, maxDim = 1024, quality = 0.8): Promise<string> {
   if (typeof window === 'undefined' || typeof Image === 'undefined') return base64;
   return new Promise((resolve) => {
     const img = new Image();
@@ -20,6 +20,8 @@ export async function downscaleBase64IfNeeded(base64: string, maxDim = 1280, qua
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       if (!ctx) return resolve(base64.replace(/^data:image\/[a-z]+;base64,/, ''));
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, width, height);
       const dataUrl = canvas.toDataURL('image/jpeg', quality);
       resolve(dataUrl.replace(/^data:image\/[a-z]+;base64,/, ''));

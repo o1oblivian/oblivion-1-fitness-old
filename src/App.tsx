@@ -31,25 +31,57 @@ export default function App() {
         tactileEngine.playPRCelebration();
         window.history.replaceState({}, document.title, window.location.pathname);
       }
+
+      // Pure client-side routing guard: prevent full-page server roundtrips & preserve auth state
+      const handleGlobalLinkClicks = (e: MouseEvent) => {
+        const anchor = (e.target as HTMLElement)?.closest('a');
+        if (!anchor) return;
+        const href = anchor.getAttribute('href');
+        if (!href || href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('blob:') || anchor.hasAttribute('download') || anchor.getAttribute('target') === '_blank') return;
+        let path = href;
+        if (path.startsWith(window.location.origin)) path = path.slice(window.location.origin.length);
+        else if (path.startsWith('http://') || path.startsWith('https://')) return;
+
+        e.preventDefault();
+        const tabTarget = path.replace(/^#\/?/, '').replace(/^\//, '').toLowerCase();
+        if (tabTarget === 'dashboard' || tabTarget === 'tracker' || tabTarget === 'workout') {
+          window.dispatchEvent(new CustomEvent('app_navigate_tab', { detail: 'tracker' }));
+          window.history.pushState(null, '', '#workout');
+        } else if (tabTarget) {
+          window.dispatchEvent(new CustomEvent('app_navigate_tab', { detail: tabTarget }));
+          window.history.pushState(null, '', `#${tabTarget}`);
+        }
+      };
+      window.addEventListener('click', handleGlobalLinkClicks);
+
+      // In-app popstate & hash change listener for flawless client-side back/forward transitions
+      const handlePopState = () => {
+        const raw = window.location.hash.replace(/^#\/?/, '').toLowerCase();
+        if (raw) {
+          const target = (raw === 'dashboard' || raw === 'workout') ? 'tracker' : raw;
+          window.dispatchEvent(new CustomEvent('app_navigate_tab', { detail: target }));
+        }
+      };
+      window.addEventListener('popstate', handlePopState);
+      window.addEventListener('hashchange', handlePopState);
+
+      const isCompleted = safeStorage.getItem('o1fc_onboarding_completed') === 'true' || safeStorage.getItem('olfc_onboarding_completed') === 'true';
+      if (!isCompleted) safeStorage.setItem('o1fc_onboarding_completed', 'true');
+
+      const handleRelaunch = () => setShowOnboarding(true);
+      window.addEventListener('o1fc_relaunch_onboarding', handleRelaunch);
+      window.addEventListener('o1fc_account_deleted', handleRelaunch);
+
+      return () => {
+        cleanupRollover();
+        window.removeEventListener('click', handleGlobalLinkClicks);
+        window.removeEventListener('popstate', handlePopState);
+        window.removeEventListener('hashchange', handlePopState);
+        window.removeEventListener('o1fc_relaunch_onboarding', handleRelaunch);
+        window.removeEventListener('o1fc_account_deleted', handleRelaunch);
+      };
     }
-
-    const isCompleted =
-      safeStorage.getItem('o1fc_onboarding_completed') === 'true' ||
-      safeStorage.getItem('olfc_onboarding_completed') === 'true';
-    if (!isCompleted) {
-      // Automatically provision default session for instant preview access
-      safeStorage.setItem('o1fc_onboarding_completed', 'true');
-    }
-
-    const handleRelaunch = () => setShowOnboarding(true);
-    window.addEventListener('o1fc_relaunch_onboarding', handleRelaunch);
-    window.addEventListener('o1fc_account_deleted', handleRelaunch);
-
-    return () => {
-      cleanupRollover();
-      window.removeEventListener('o1fc_relaunch_onboarding', handleRelaunch);
-      window.removeEventListener('o1fc_account_deleted', handleRelaunch);
-    };
+    return () => cleanupRollover();
   }, []);
 
   return (

@@ -261,20 +261,20 @@ export const UnifiedTopBoard: React.FC<UnifiedTopBoardProps> = ({
           <div className="p-3 rounded-2xl bg-neutral-50 dark:bg-[#18181b] border border-neutral-200 dark:border-neutral-800 flex items-center justify-between text-xs">
             <div className="space-y-0.5">
               <span className="text-[10px] font-mono uppercase text-neutral-500 dark:text-neutral-400 font-bold block">
-                DAY AHEAD PREPARATION ({nextProgramDay.dayName})
+                DAY AHEAD PREPARATION ({nextProgramDay?.dayName || 'Tomorrow'})
               </span>
               <span className="font-bold text-neutral-900 dark:text-white">
-                {nextProgramDay.title}
+                {nextProgramDay?.title || 'Scheduled Protocol'}
               </span>
             </div>
             <span
               className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded ${
-                nextProgramDay.isRestDay
+                nextProgramDay?.isRestDay
                   ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20'
                   : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
               }`}
             >
-              {nextProgramDay.isRestDay ? 'REST DAY' : 'NEXT PROTOCOL'}
+              {nextProgramDay?.isRestDay ? 'REST DAY' : 'NEXT PROTOCOL'}
             </span>
           </div>
         )}

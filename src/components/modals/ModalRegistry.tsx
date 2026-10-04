@@ -65,11 +65,11 @@ export const ModalRegistry: React.FC = () => {
           const cb = (payload as CardioScannerPayload)?.onPostCardio;
           if (cb) {
             cb({
-              type: 'Console Telemetry',
-              calories: data.caloriesBurned,
-              durationMins: Math.max(1, Math.round(data.elapsedMinutes)),
+              type: data.deviceType === 'watch' ? 'Smartwatch Pedometer' : 'Console Telemetry',
+              calories: data.caloriesBurned || 0,
+              durationMins: data.elapsedMinutes != null ? Math.max(1, Math.round(data.elapsedMinutes)) : 0,
               avgHr: data.avgHeartRateBpm || 0,
-              steps: Math.round(data.distanceKm * 1300),
+              steps: data.steps || (data.distanceKm != null ? Math.round(data.distanceKm * 1312) : 0),
             });
           }
           closeModal();

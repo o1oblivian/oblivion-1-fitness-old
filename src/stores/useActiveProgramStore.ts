@@ -216,27 +216,29 @@ export const useActiveProgramStore = create<ActiveProgramState>()(
 
       getNextDayWorkout: () => {
         const { schedule, currentDayIndex, hasActiveProgram } = get();
-        if (!hasActiveProgram || !schedule || schedule.length === 0) return null;
-        const nextIdx = (currentDayIndex + 1) % schedule.length;
-        return schedule[nextIdx] || null;
+        const activeSchedule = (schedule && schedule.length > 0) ? schedule : (hasActiveProgram ? DEFAULT_PROGRAM_SCHEDULE : []);
+        if (activeSchedule.length === 0) return null;
+        const nextIdx = (currentDayIndex + 1) % activeSchedule.length;
+        return activeSchedule[nextIdx] || null;
       },
 
       advanceToNextDay: (_completedSessionTonnageKg) => {
         const { schedule, currentDayIndex } = get();
-        const nextIdx = (currentDayIndex + 1) % schedule.length;
+        const activeSchedule = (schedule && schedule.length > 0) ? schedule : DEFAULT_PROGRAM_SCHEDULE;
+        const nextIdx = (currentDayIndex + 1) % (activeSchedule.length || 1);
         const todayStr = new Date().toISOString().split('T')[0];
         set({
           currentDayIndex: nextIdx,
           lastCompletedDate: todayStr,
         });
-        return schedule[nextIdx];
+        return activeSchedule[nextIdx] || activeSchedule[0];
       },
 
       completeTodayAndAdvance: () => {
         const nextDay = get().advanceToNextDay();
         return {
           nextDay,
-          isRestDay: nextDay.isRestDay,
+          isRestDay: Boolean(nextDay?.isRestDay),
         };
       },
 

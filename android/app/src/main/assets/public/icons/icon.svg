@@ -1,9 +1,61 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" rx="112" fill="#09090b"/>
-  <circle cx="256" cy="256" r="230" stroke="#C4121A" stroke-width="4" fill="none" opacity="0.4"/>
-  <path d="M 256 96 L 396 172 V 304 C 396 376 256 424 256 424 C 256 424 116 376 116 304 V 172 Z" fill="#121214" stroke="#C4121A" stroke-width="12" stroke-linejoin="round"/>
-  <path d="M 256 128 L 366 188 V 292 C 366 348 256 388 256 388 C 256 388 146 348 146 292 V 188 Z" fill="#C4121A" opacity="0.15"/>
-  <!-- Tactical Roman Numeral / 1 / Monogram -->
-  <text x="256" y="300" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="900" font-size="160" fill="#FFFFFF" text-anchor="middle" letter-spacing="4">O1</text>
-  <circle cx="256" cy="345" r="8" fill="#C4121A"/>
+  <!-- Solid Jet Black Background #000000 -->
+  <rect width="512" height="512" fill="#000000"/>
+
+  <g transform="translate(256, 256) scale(1.08) translate(-256, -256)" fill="#FFFFFF">
+    <!-- ==================== LINE 1: O1 ==================== -->
+    
+    <!-- Letter O: Bold Circular Ring -->
+    <path fill-rule="evenodd" d="
+      M 194, 102
+      A 70, 70 0 1, 1 193.99, 102 Z
+      M 194, 137
+      A 35, 35 0 1, 0 194.01, 137 Z
+    "/>
+
+    <!-- Number 1: Bold Sans Numeral with Iconic Downward Beak -->
+    <path d="
+      M 300, 102
+      L 342, 102
+      L 342, 242
+      L 300, 242
+      L 300, 150
+      L 278, 168
+      L 256, 146
+      L 300, 102 Z
+    "/>
+
+    <!-- ==================== LINE 2: FC ==================== -->
+
+    <!-- Letter F: Dynamic Athletic Speed Slashes -->
+    <!-- Outer Slash Blade -->
+    <polygon points="154,402 188,402 224,324 190,324" />
+
+    <!-- F Spine + Top Arm + Mid Crossbar -->
+    <path d="
+      M 206, 402
+      L 242, 402
+      L 263, 356
+      L 296, 356
+      L 296, 324
+      L 278, 324
+      L 293, 296
+      L 326, 296
+      L 326, 262
+      L 250, 262
+      L 221, 324
+      L 224, 324
+      L 211, 353
+      Z
+    "/>
+
+    <!-- Letter C: Bold Ring Matching O with Clean Right Opening -->
+    <path d="
+      M 378, 296
+      A 70, 70 0 1, 0 378, 368
+      L 348, 350
+      A 35, 35 0 1, 1 348, 314
+      Z
+    "/>
+  </g>
 </svg>

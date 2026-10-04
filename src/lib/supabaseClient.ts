@@ -1,5 +1,5 @@
 /**
- * Re-export and browser guard for Supabase client
+ * Re-export and safe initialization guard for Supabase client
  * Strict File Ceiling: < 140 lines
  */
 export { supabase, syncSessionToSupabase, fetchAthleteProfile } from '../services/supabaseClient';

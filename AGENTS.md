@@ -29,3 +29,19 @@ All future agents and contributors MUST adhere strictly to these rules:
    - Zero TypeScript compilation errors (`tsc --noEmit` must pass cleanly).
    - Zero unused imports or dead variable references.
    - All interactive controls (buttons, inputs, sliders, toggles) must have complete, robust event handlers.
+
+5. **Android Production Baseline & Permission Lockdown (Version 69 Golden Baseline)**:
+   - `android/app/src/main/AndroidManifest.xml` on `main` is the locked golden baseline. Never revert, overwrite, or mutate it without explicit instructions.
+   - STRICT FORBIDDEN PERMISSIONS (Never add under any circumstance):
+     * `android.permission.READ_MEDIA_IMAGES`
+     * `android.permission.RECORD_AUDIO`
+     * `android.permission.MODIFY_AUDIO_SETTINGS`
+     * `android.permission.ACTIVITY_RECOGNITION`
+     * `android.permission.BODY_SENSORS`
+   - ONLY PERMITTED PERMISSIONS:
+     * `android.permission.INTERNET`
+     * `android.permission.CAMERA`
+     * `android.permission.BLUETOOTH`, `BLUETOOTH_ADMIN`, `BLUETOOTH_SCAN` (`neverForLocation`), `BLUETOOTH_CONNECT`
+
+6. **Permanent Rule (Optical Vision Engine)**:
+   - Optical Vision Engine must return `null` for non-visible metrics on watches and gym consoles. Never apply zero or estimated fallbacks. Unread metrics must render as '--'.
